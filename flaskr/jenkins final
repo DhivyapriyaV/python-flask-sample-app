@@ -1,0 +1,98 @@
+pipeline {
+ 
+   agent {
+      label "docker"
+        } 
+    environment {
+        imageName ="python-flask-docker"
+        registryCredentials = "admin"
+        registry = "192.168.152.126:8085/"
+        dockerImage = ''
+        tagName = "latest"
+        } 
+    
+    stages {
+        
+        stage('SCM') {
+            steps {
+                checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/DhivyapriyaV/python-flask-sample-app.git']])
+       
+            }
+    
+        }
+        stage('building image') {
+            steps {
+                script {
+                       dockerImage = docker.build  imageName
+                }
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+              script {
+               scannerHome = tool 'sonarqube-scanner'
+                 
+                withSonarQubeEnv('sonarqube') {
+                 sh "${scannerHome}/bin/sonar-scanner"
+                }
+              }
+            }
+        }
+        /*stage("quality-gate") {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                 waitForQualityGate abortPipeline: true
+                }
+            }
+        }*/
+        
+        /*stage("Quality Gate"){
+            steps {
+              script {
+                timeout(time: 2, unit: 'MINUTES') {
+                def qg = waitForQualityGate()
+                    if (qg.status != 'OK') {
+                        error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                    }
+                }
+              }
+            }
+        }*/
+        
+        
+        stage('Uploading to Nexus') {
+          steps{  
+            script {
+                docker.withRegistry( 'http://'+registry, registryCredentials ) {
+                dockerImage.push("${tagName}")
+                }
+            }
+          }
+        }
+        
+        stage('Stop-Running-Containers') {
+            steps {
+                sh 'docker ps -f name=pythoncontainer -q | xargs --no-run-if-empty docker container stop'
+                sh 'docker container ls -a -fname=pythoncontainer -q | xargs -r docker container rm'
+            }
+        }
+        
+        stage('Docker Run') {
+            agent {
+             label "deploy"
+            } 
+            steps{
+                script {
+                    //sh 'docker run -d -p  5000:5000 --rm --name pythoncontainer python-flask-docker:latest'
+                    withDockerRegistry(credentialsId: 'admin', url: 'http://192.168.152.126:8085/') {
+                    sh 'docker run -d -p 5000:5000 --rm --name pythoncontainer ' + registry + imageName + ':${tagName}' 
+                    }
+                }
+            }    
+        }
+        
+        
+    }
+    
+}
